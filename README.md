@@ -2,6 +2,11 @@
 
 A custom Home Assistant (HA) dashboard for [M5Stack PaperColor](https://docs.m5stack.com/en/core/PaperColor).
 
+Currently displaying Nord Pool hourly prices, weather forecast from HA weather integration, outdoor temperature from HA sensor and indoor temperature from onboard sensor.
+
+![Sample of Today's prices](images/sample_today.png)
+![Sample including Tomorrow's prices](images/sample_tomorrow_high.png)
+
 
 ## Credits and Attribution
 
