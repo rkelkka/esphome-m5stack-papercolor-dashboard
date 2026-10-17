@@ -1,0 +1,6 @@
+# Ignore ESPHome build artifacts and cache
+.esphome/
+build/
+
+# Ignore your sensitive secrets file
+secrets.yaml
