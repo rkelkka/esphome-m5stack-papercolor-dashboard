@@ -156,7 +156,7 @@ esphome:
               - script.stop: ota_led_flash
               - light.turn_off: leds
               # Wait for EPD panel refresh to complete before PMIC cuts power (~15-19s refresh)
-              - delay: 20s
+              - delay: 30s
               - lambda: 'id(epd_refresh_in_progress) = false;'
               # PMIC shutdown with 7-day timer — effectively indefinite.
               # User can wake manually via physical power button S4 to charge.
@@ -244,7 +244,8 @@ esphome:
                     # 20s covers: 150ms WS2812 off-frame settle + up to ~19s Spectra E6 full refresh.
                     # The EPD component.update is asynchronous — the panel refresh runs in the background
                     # and takes 15–19s. We must not cut the EPD power rail until it is complete.
-                    - delay: 20s
+                    # Using 30s in an attempt to resolve occasional partial refresh
+                    - delay: 30s
                     - lambda: 'id(epd_refresh_in_progress) = false;'
                     - lambda: 'id(last_usb_refresh_ms) = millis();'
                     - if:
@@ -1032,7 +1033,7 @@ binary_sensor:
                     - component.update: wifi_signal_db
                     - lambda: 'id(epd_refresh_in_progress) = true;'
                     - component.update: m5_color_screen
-                    - delay: 20s   # wait for EPD panel refresh to complete (~15-19s)
+                    - delay: 30s   # wait for EPD panel refresh to complete (~15-19s)
                     - lambda: 'id(epd_refresh_in_progress) = false;'
                     - script.execute:
                         id: pmic_shutdown
