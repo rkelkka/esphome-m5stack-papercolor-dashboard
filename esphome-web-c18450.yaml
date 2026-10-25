@@ -270,6 +270,18 @@ esphome:
                           # SYS_CMD_OFF cuts all rails — no need to disable them individually.
                           # Disabling rails before shutdown would leave them off if the fail-safe
                           # aborts shutdown, degrading the device without powering it down.
+                          # A voice session may have started during the 30s refresh delay —
+                          # don't cut power mid-session.
+                          - if:
+                              condition:
+                                voice_assistant.is_running:
+                              then:
+                                - logger.log: "Boot shutdown: voice assistant active — waiting before shutdown"
+                                - wait_until:
+                                    condition:
+                                      not:
+                                        voice_assistant.is_running:
+                                    timeout: 120s
                           - lambda: 'ESP_LOGI("sleep", "PMIC shutdown — wake in %.0f min", id(battery_sleep_mins).state);'
                           - script.execute:
                               id: pmic_shutdown
@@ -821,6 +833,18 @@ script:
           condition:
             lambda: 'return !id(usb_connected).state;'
           then:
+            # Don't cut power mid-session — wait for the voice assistant to finish
+            # (STT/intent/TTS can easily push a session past the 180s mark).
+            - if:
+                condition:
+                  voice_assistant.is_running:
+                then:
+                  - logger.log: "Watchdog: voice assistant active — waiting before shutdown"
+                  - wait_until:
+                      condition:
+                        not:
+                          voice_assistant.is_running:
+                      timeout: 120s
             - lambda: 'ESP_LOGW("watchdog", "Battery wake >90s without shutdown — safety net firing");'
             - script.execute:
                 id: pmic_shutdown
@@ -931,7 +955,7 @@ script:
                   - light.turn_on:
                       id: leds
                       red: 100%
-                      green: 0%
+                      green: 65%
                       blue: 0%
                       brightness: !lambda 'return id(indicator_brightness).state / 100.0f;'
                 else:
