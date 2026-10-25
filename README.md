@@ -10,10 +10,10 @@ A custom Home Assistant (HA) dashboard for [M5Stack PaperColor](https://docs.m5s
 - Indoor temperature from the onboard sensor
 
 <picture>
-  <img src="images/sample_today.png" height="200" alt="Today's prices" />
+  <img src="images/sample_today.jpg" width="400" alt="Today's prices" />
 </picture>
 <picture>
-  <img src="images/sample_tomorrow_high.png" height="200" alt="Tomorrow's prices" />
+  <img src="images/sample_tomorrow_high.jpg" width="400" alt="Tomorrow's prices" />
 </picture>
 
 
