@@ -1,0 +1,10 @@
+services:
+  papercolor-proxy:
+    build: .
+    container_name: papercolor-proxy
+    restart: unless-stopped
+    ports:
+      - "5055:5055"
+    environment:
+      # Replace with your Immich Kiosk URL (and optional ?album=... or ?layout=landscape)
+      - KIOSK_URL=${KIOSK_URL:-http://immich-kiosk/image}

@@ -27,6 +27,7 @@ The panel can also work as a digital **picture frame**, displaying a full-screen
 
 NOTE: displaying a normal image as such results in poor image quality on the display.
 Better results can be achieved by calibrating the image to suit the Spectra 6 palette.
+See the [image proxy](./util/image_proxy) utility for details.
 
 
 * **Online Image URL** text box — holds the picture's URL and is restored across reboots. Changing it applies immediately: the new URL is set on the image component with an update, so the fresh picture is fetched right away.
