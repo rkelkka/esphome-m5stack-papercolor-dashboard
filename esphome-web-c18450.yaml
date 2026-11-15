@@ -246,6 +246,20 @@ esphome:
                         id: pmic_shutdown
                         wake_seconds: !lambda 'return id(overnight_wake_seconds);'
                   else:
+                    # Remote-image mode: pull a fresh copy first. Bounded wait — on failure
+                    # we just render the dashboard (online_image_ready stays/cleared false).
+                    - if:
+                        condition:
+                          lambda: 'return id(show_remote_image_switch).state;'
+                        then:
+                          - lambda: |-
+                              id(online_image_ready) = false;
+                              ESP_LOGI("remote_img", "Fetching remote image at boot");
+                          - component.update: my_online_image
+                          - wait_until:
+                              condition:
+                                lambda: 'return id(online_image_ready);'
+                              timeout: 20s
                     - lambda: 'id(epd_refresh_in_progress) = true;'
                     - component.update: m5_color_screen
                     - script.stop: ota_led_flash
@@ -298,6 +312,13 @@ globals:
     type: uint32_t
     restore_value: false
     initial_value: '0'
+  # Set true by my_online_image.on_download_finished; cleared before each fetch.
+  # The display lambda only draws the image when this is set, so a failed or
+  # timed-out download falls back to the normal dashboard instead of garbage.
+  - id: online_image_ready
+    type: bool
+    restore_value: false
+    initial_value: 'false'
   - id: low_battery_triggered
     type: bool
     restore_value: false
@@ -433,6 +454,32 @@ wifi:
     password: !secret papercolor_ap_password
     
 captive_portal:
+
+# -- Image ---------------------------------------------------------------------
+http_request:
+  timeout: 20s
+  watchdog_timeout: 20s
+
+image:
+  - platform: online_image
+    url: "http://localhost/placeholder.jpg"
+    format: PNG
+    type: RGB
+    id: my_online_image
+    on_download_finished:
+      then:
+        # Only mark ready after a full frame decoded successfully, so failures/timeouts fall back to dashboard.
+        - lambda: |-
+            id(online_image_ready) = true;
+            ESP_LOGI("remote_img", "Download finished (cached=%s)", cached ? "yes" : "no");
+        - if:
+            condition:
+              and:
+                - lambda: 'return id(show_remote_image_switch).state && !id(epd_refresh_in_progress);'
+                - not:
+                    epaper_spi.is_updating: m5_color_screen
+            then:
+              - component.update: m5_color_screen
 
 # ── Time ──────────────────────────────────────────────────────────────────────
 
@@ -1141,7 +1188,29 @@ number:
     icon: "mdi:volume-high"
     entity_category: config
 
-
+# -- Configurable text variables
+text:
+  - platform: template
+    name: "Online Image: URL"
+    id: online_image_url
+    mode: text
+    min_length: 0
+    max_length: 255
+    initial_value: "http://localhost/placeholder.png"
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    icon: "mdi:image"
+    on_value:
+      then:
+        - if:
+            condition:
+              lambda: 'return !x.empty();'
+            then:
+              - online_image.set_url:
+                  id: my_online_image
+                  url: !lambda 'return id(online_image_url).state.c_str();'
+                  update: true
 
 # ── Switches ──────────────────────────────────────────────────────────────────
 switch:
@@ -1192,6 +1261,35 @@ switch:
     optimistic: true
     entity_category: config
 
+  # Display source toggle: normal Nord Pool/weather dashboard OR full-screen remote image.
+  # Restored across PMIC cold boots. Turning ON fetches the latest image first (bounded wait);
+  # turning OFF just redraws so the old frame doesn't linger on the panel.
+  - platform: template
+    name: "Online Image: Show image"
+    id: show_remote_image_switch
+    icon: "mdi:image"
+    restore_mode: RESTORE_DEFAULT_OFF
+    optimistic: true
+    entity_category: config
+    turn_on_action:
+      # Only fetch if we don't already hold a ready image (e.g. from boot restore).
+      - if:
+          condition:
+            lambda: 'return !id(online_image_ready);'
+          then:
+            - lambda: |-
+                id(online_image_ready) = false;
+                ESP_LOGI("remote_img", "Image not yet fetched, requesting download");
+            - component.update: my_online_image
+            - wait_until:
+                condition:
+                  lambda: 'return id(online_image_ready);'
+                timeout: 20s
+      # Image is ready now — make sure the panel actually shows it.
+      - component.update: m5_color_screen
+    turn_off_action:
+      - component.update: m5_color_screen
+
   # Powered-on indicator — dim white LED while the device is awake.
   # Restored on boot; the on_boot sequence only lights the LED when this is ON.
   # The LED is always cleared by pmic_shutdown before the power rail dies.
@@ -1215,9 +1313,11 @@ switch:
 
 # ── Buttons ───────────────────────────────────────────────────────────────────
 # Physical order left to right: A=GPIO10, B=GPIO9, C=GPIO1
-# Button A: manual display refresh (useful for a second refresh within the wake window)
-# Button B: wake pin — wakes device from deep sleep, triggers auto refresh + 90s OTA window
-# Button C: available for future use
+# Button A: manual display refresh (useful for a second refresh within the wake window).
+#           When Show Remote Image is ON, also re-pulls a fresh frame from the server first.
+# Button B: toggle Show Remote Image switch (dashboard <-> full-screen online image)
+#           (no longer a wake pin — PMIC full shutdown means GPIO9 can't wake anyway)
+# Button C: voice assistant push-to-talk
 
 binary_sensor:
   - platform: template
@@ -1292,9 +1392,44 @@ binary_sensor:
               lambda: 'return !id(epd_refresh_in_progress);'
             then:
               - logger.log: "Button A pressed — refreshing display"
+              # If the remote image view is active, pull a fresh frame first so the
+              # panel redraw uses it instead of the last cached download.
+              - if:
+                  condition:
+                    lambda: 'return id(show_remote_image_switch).state;'
+                  then:
+                    - lambda: |-
+                        id(online_image_ready) = false;
+                        ESP_LOGI("remote_img", "Re-fetch requested via Button A");
+                    - component.update: my_online_image
+                    - wait_until:
+                        condition:
+                          lambda: 'return id(online_image_ready);'
+                        timeout: 20s
               - component.update: battery_mv
               - component.update: wifi_signal_db
               - component.update: m5_color_screen
+
+
+  # Button B: toggle remote image view (dashboard <-> full-screen online image).
+  # The switch's turn_on_action fetches a fresh image; turn_off redraws dashboard.
+  - platform: gpio
+    pin:
+      number: GPIO9
+      inverted: true
+      mode: INPUT_PULLUP
+    name: "Button B"
+    id: btn_b
+    filters:
+      - delayed_on: 10ms
+    on_press:
+      then:
+        - if:
+            condition:
+              lambda: 'return !id(epd_refresh_in_progress);'
+            then:
+              - logger.log: "Button B pressed — toggling Show Remote Image"
+              - switch.toggle: show_remote_image_switch
 
 
   - platform: gpio
@@ -1364,10 +1499,11 @@ display:
     rotation: 270°
     update_interval: never
     lambda: |-
-      it.fill(id(color_white));
 
       // ── Low battery screen ────────────────────────────────────────────────
       if (id(low_battery_triggered)) {
+        it.fill(id(color_white));
+
         it.filled_rectangle(0, 0, 600, 56, id(color_red));
         it.print(300, 12, id(font_large), id(color_white), TextAlign::TOP_CENTER, "BATTERY LOW");
         it.print(300, 100, id(font_large), id(color_red), TextAlign::TOP_CENTER, "Please charge via USB-C");
@@ -1380,6 +1516,17 @@ display:
         it.print(300, 325, id(font_small), id(color_black), TextAlign::TOP_CENTER, "Charge via USB-C, then press the power button to wake.");
         return;
       }
+
+      // ── Remote-image mode ────────────────────────────────────────────────
+      // Requires BOTH the switch and a successfully decoded frame; any fetch failure or
+      // timeout falls through to the dashboard below instead of drawing garbage.
+      if (id(show_remote_image_switch).state && id(online_image_ready)) {
+        it.image(0,0, id(my_online_image));
+        return;
+      }
+
+      it.fill(id(color_white));
+
 
       auto time_now = id(ha_time).now();
       int current_hour = time_now.is_valid() ? time_now.hour : 0;
@@ -2037,6 +2184,7 @@ display:
         snprintf(room_str, sizeof(room_str), "--");
       }
       it.print(585, scy, id(font_small), id(color_black), TextAlign::CENTER_RIGHT, room_str);
+
       
 # ── Interval refresh (USB only) ───────────────────────────────────────────────
 # When on USB power, deep sleep is prevented and the wake/sleep cycle stops.
