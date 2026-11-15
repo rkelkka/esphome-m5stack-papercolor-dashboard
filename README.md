@@ -21,6 +21,10 @@ A custom Home Assistant (HA) dashboard for [M5Stack PaperColor](https://docs.m5s
 
 The panel can also work as a digital **picture frame**, displaying a full-screen photo downloaded over HTTP instead of the dashboard (ESPHome `online_image` component).
 
+<picture>
+  <img src="images/sample_picture_frame.png" width="400" alt="Picture frame sample" />
+</picture>
+
 NOTE: displaying a normal image as such results in poor image quality on the display.
 Better results can be achieved by calibrating the image to suit the Spectra 6 palette.
 
