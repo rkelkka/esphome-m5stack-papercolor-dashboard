@@ -165,7 +165,7 @@ esphome:
               #- light.turn_off: leds
               - script.execute: restore_indicator_led
               # Wait for EPD panel refresh to complete before PMIC cuts power (~15-19s refresh)
-              - delay: 30s
+              - delay: 60s
               - lambda: 'id(epd_refresh_in_progress) = false;'
               # PMIC shutdown with 7-day timer — effectively indefinite.
               # User can wake manually via physical power button S4 to charge.
@@ -261,15 +261,21 @@ esphome:
                                 lambda: 'return id(online_image_ready);'
                               timeout: 20s
                     - lambda: 'id(epd_refresh_in_progress) = true;'
+                    - component.update: battery_mv
+                    - component.update: wifi_signal_db
                     - component.update: m5_color_screen
                     - script.stop: ota_led_flash
                     #- light.turn_off: leds
                     - script.execute: restore_indicator_led
-                    # 20s covers: 150ms WS2812 off-frame settle + up to ~19s Spectra E6 full refresh.
-                    # The EPD component.update is asynchronous — the panel refresh runs in the background
-                    # and takes 15–19s. We must not cut the EPD power rail until it is complete.
-                    # Using 30s in an attempt to resolve occasional partial refresh
-                    - delay: 30s
+                    # Wait for the EPD panel to actually finish refreshing instead of guessing with a
+                    # fixed delay. The Spectra E6 full refresh takes 15–19s and the power rail must
+                    # stay on until it completes. The 90s timeout is a hard backstop; normal
+                    # completion is detected via the component's own state.
+                    - wait_until:
+                        condition:
+                          not:
+                            epaper_spi.is_updating: m5_color_screen
+                        timeout: 90s
                     - lambda: 'id(epd_refresh_in_progress) = false;'
                     - lambda: 'id(last_usb_refresh_ms) = millis();'
                     - if:
@@ -475,10 +481,11 @@ image:
         - if:
             condition:
               and:
-                - lambda: 'return id(show_remote_image_switch).state && !id(epd_refresh_in_progress);'
+                - lambda: 'return id(show_remote_image_switch).state;'
                 - not:
                     epaper_spi.is_updating: m5_color_screen
             then:
+              - component.update: battery_mv
               - component.update: m5_color_screen
 
 # ── Time ──────────────────────────────────────────────────────────────────────
@@ -768,7 +775,14 @@ sensor:
               - logger.log: "Outdoor temp arrived after timeout — refreshing display"
               - component.update: battery_mv
               - component.update: wifi_signal_db
-              - component.update: m5_color_screen
+              # Don't queue a second refresh while the panel is still writing —
+              # epaper_spi rejects it with "Display already in state RESET".
+              - if:
+                  condition:
+                    not:
+                      epaper_spi.is_updating: m5_color_screen
+                  then:
+                    - component.update: m5_color_screen
 
   - platform: wifi_signal
     name: "WiFi Signal dB"
@@ -1286,8 +1300,10 @@ switch:
                   lambda: 'return id(online_image_ready);'
                 timeout: 20s
       # Image is ready now — make sure the panel actually shows it.
+      - component.update: battery_mv
       - component.update: m5_color_screen
     turn_off_action:
+      - component.update: battery_mv
       - component.update: m5_color_screen
 
   # Powered-on indicator — dim white LED while the device is awake.
@@ -1352,7 +1368,10 @@ binary_sensor:
               - light.turn_off: leds
               - if:
                   condition:
-                    lambda: 'return id(initial_display_done) && !id(epd_refresh_in_progress);'
+                    and:
+                      - lambda: 'return id(initial_display_done);'
+                      - not:
+                          epaper_spi.is_updating: m5_color_screen
                   then:
                     - component.update: battery_mv
                     - component.update: wifi_signal_db
@@ -1368,10 +1387,8 @@ binary_sensor:
                     - lambda: 'ESP_LOGI("USB", "USB disconnected — refreshing then issuing PMIC shutdown");'
                     - component.update: battery_mv
                     - component.update: wifi_signal_db
-                    - lambda: 'id(epd_refresh_in_progress) = true;'
                     - component.update: m5_color_screen
-                    - delay: 30s   # wait for EPD panel refresh to complete (~15-19s)
-                    - lambda: 'id(epd_refresh_in_progress) = false;'
+                    - delay: 60s   # wait for EPD panel refresh to complete (~15-19s)
                     - script.execute:
                         id: pmic_shutdown
                         wake_seconds: !lambda 'return (uint32_t)(id(battery_sleep_mins).state * 60.0f);'
@@ -1389,7 +1406,8 @@ binary_sensor:
       then:
         - if:
             condition:
-              lambda: 'return !id(epd_refresh_in_progress);'
+              not:
+                epaper_spi.is_updating: m5_color_screen
             then:
               - logger.log: "Button A pressed — refreshing display"
               # If the remote image view is active, pull a fresh frame first so the
@@ -1426,7 +1444,8 @@ binary_sensor:
       then:
         - if:
             condition:
-              lambda: 'return !id(epd_refresh_in_progress);'
+              not:
+                epaper_spi.is_updating: m5_color_screen
             then:
               - logger.log: "Button B pressed — toggling Show Remote Image"
               - switch.toggle: show_remote_image_switch
@@ -2201,13 +2220,20 @@ interval:
                      !id(epd_refresh_in_progress) &&
                      (millis() - id(last_usb_refresh_ms)) >= (uint32_t)(id(usb_refresh_mins).state * 60000.0f);
           then:
-            - lambda: 'id(last_usb_refresh_ms) = millis();'
-            - logger.log: "Interval refresh — USB connected"
-            - script.execute: fetch_weather
-            - script.wait: fetch_weather
-            - component.update: battery_mv
-            - component.update: wifi_signal_db
-            - component.update: m5_color_screen
+            # Re-check the panel's real state at fire time — the flag above only
+            # covers the boot window, a button/image refresh could be in flight now.
+            - if:
+                condition:
+                  not:
+                    epaper_spi.is_updating: m5_color_screen
+                then:
+                  - lambda: 'id(last_usb_refresh_ms) = millis();'
+                  - logger.log: "Interval refresh — USB connected"
+                  - script.execute: fetch_weather
+                  - script.wait: fetch_weather
+                  - component.update: battery_mv
+                  - component.update: wifi_signal_db
+                  - component.update: m5_color_screen
 
 # ── Diagnostics ───────────────────────────────────────────────────────────────
 
